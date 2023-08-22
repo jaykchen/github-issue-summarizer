@@ -3,8 +3,7 @@ use dotenv::dotenv;
 use flowsnet_platform_sdk::logger;
 use github_flows::{
     get_octo, listen_to_event,
-    octocrab::models::{events::payload::IssuesEventAction, issues::Issue, CommentId},
-    octocrab::params::{Direction, State},
+    octocrab::models::{events::payload::IssuesEventAction, issues::Issue},
     EventPayload, GithubLogin,
 };
 use openai_flows::{
@@ -55,12 +54,25 @@ async fn handler(owner: &str, repo: &str, trigger_phrase: &str, payload: EventPa
             _ => std::process::exit(1),
         };
         log::error!("Target owner, repo: {:?}, {:?}", target_owner, target_repo);
+        // match octocrab
+        //     .issues(target_owner.clone(), target_repo.clone())
+        //     .list()
+        //     .state(State::Open)
+        //     .direction(Direction::Descending)
+        //     // .sort(Sort::Updated)
+        //     .per_page(100)
+        //     .page(1u32)
+        //     .send()
+
+        let a_week_ago = (chrono::Utc::now() - chrono::Duration::days(7))
+            .format("%Y-%m-%dT%H:%M:%SZ");
+        let query =
+            format!("repo:{target_owner}/{target_repo} is:issue state:open updated:>{a_week_ago}");
         match octocrab
-            .issues(target_owner.clone(), target_repo.clone())
-            .list()
-            .state(State::Open)
-            .direction(Direction::Descending)
-            // .sort(Sort::Updated)
+            .search()
+            .issues_and_pull_requests(&query)
+            .sort("desc")
+            .order("updated")
             .per_page(100)
             .page(1u32)
             .send()
@@ -68,10 +80,11 @@ async fn handler(owner: &str, repo: &str, trigger_phrase: &str, payload: EventPa
         {
             Ok(issues_on_target) => {
                 for issue in issues_on_target.items {
-                    let summary = match analyze_issue(&target_owner, &target_repo, issue).await {
-                        Some(s) => s,
-                        None => "No summary generated".to_string(),
-                    };
+                    let summary =
+                        match analyze_issue(&target_owner, &target_repo, issue.clone()).await {
+                            Some(s) => s,
+                            None => "No summary generated".to_string(),
+                        };
 
                     let resp = format!(
                         "{}\n{}\n{}\n
@@ -257,281 +270,4 @@ pub async fn analyze_issue(owner: &str, repo: &str, issue: Issue) -> Option<Stri
     }
 }
 
-/* pub async fn github_http_post(token: &str, base_url: &str, query: &str) -> Option<Vec<u8>> {
-    let base_url = Uri::try_from(base_url).unwrap();
-    let mut writer = Vec::new();
 
-    let query = serde_json::json!({"query": query});
-    match Request::new(&base_url)
-        .method(Method::POST)
-        .header("User-Agent", "flows-network connector")
-        .header("Content-Type", "application/json")
-        .header("Authorization", &format!("Bearer {}", token))
-        .header("Content-Length", &query.to_string().len())
-        .body(&query.to_string().into_bytes())
-        .send(&mut writer)
-    {
-        Ok(res) => {
-            if !res.status_code().is_success() {
-                log::error!("Github http error {:?}", res.status_code());
-                return None;
-            };
-            Some(writer)
-        }
-        Err(_e) => {
-            log::error!("Error getting response from Github: {:?}", _e);
-            None
-        }
-    }
-} */
-
-/* pub async fn search_issue(github_token: &str, search_query: &str) -> Option<String> {
-    #[derive(Debug, Deserialize, Clone)]
-    pub struct User {
-        login: Option<String>,
-    }
-
-    #[derive(Debug, Deserialize, Clone)]
-    struct AssigneeNode {
-        node: Option<User>,
-    }
-
-    #[derive(Debug, Deserialize, Clone)]
-    struct AssigneeEdge {
-        edges: Option<Vec<Option<AssigneeNode>>>,
-    }
-
-    #[derive(Debug, Deserialize, Clone)]
-    struct Issue {
-        url: Option<String>,
-        number: Option<u64>,
-        state: Option<String>,
-        title: Option<String>,
-        body: Option<String>,
-        author: Option<User>,
-        assignees: Option<AssigneeEdge>,
-        #[serde(rename = "authorAssociation")]
-        author_association: Option<String>,
-        #[serde(rename = "createdAt")]
-        created_at: Option<DateTime<Utc>>,
-        #[serde(rename = "updatedAt")]
-        updated_at: Option<DateTime<Utc>>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct IssueNode {
-        node: Option<Issue>,
-    }
-
-    #[derive(Debug, Deserialize, Clone)]
-    struct PageInfo {
-        #[serde(rename = "endCursor")]
-        end_cursor: Option<String>,
-        #[serde(rename = "hasNextPage")]
-        has_next_page: Option<bool>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct SearchResult {
-        edges: Option<Vec<Option<IssueNode>>>,
-        #[serde(rename = "pageInfo")]
-        page_info: Option<PageInfo>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct IssueSearch {
-        search: Option<SearchResult>,
-    }
-
-    #[derive(Debug, Deserialize)]
-    struct IssueRoot {
-        data: Option<IssueSearch>,
-    }
-
-    let base_url = "https://api.github.com/graphql";
-    let mut out = String::from("ISSUES \n");
-
-    let mut cursor = None;
-
-    loop {
-        let query = format!(
-            r#"
-            query {{
-                search(query: "{search_query}", type: ISSUE, first: 100{after}) {{
-                    edges {{
-                        node {{
-                            ... on Issue {{
-                                url
-                                number
-                                state
-                                title
-                                body
-                                author {{
-                                    login
-                                }}
-                                assignees(first: 100) {{
-                                    edges {{
-                                        node {{
-                                            login
-                                        }}
-                                    }}
-                                }}
-                                authorAssociation
-                                createdAt
-                                updatedAt
-                            }}
-                        }}
-                    }}
-                    pageInfo {{
-                        endCursor
-                        hasNextPage
-                      }}
-                }}
-            }}
-            "#,
-            search_query = search_query,
-            after = cursor
-                .as_ref()
-                .map_or(String::new(), |c| format!(r#", after: "{}""#, c))
-        );
-
-        match github_http_post(&github_token, base_url, &query).await {
-            None => {
-                log::error!("Failed to send the request: {}", base_url);
-                break;
-            }
-            Some(response) => match serde_json::from_slice::<IssueRoot>(response.as_slice()) {
-                Err(e) => {
-                    log::error!("Failed to parse the response: {}", e);
-                    break;
-                }
-                Ok(results) => {
-                    if let Some(search) = &results.data.as_ref().and_then(|d| d.search.as_ref()) {
-                        if let Some(edges) = &search.edges {
-                            for edge in edges.iter().filter_map(|e| e.as_ref()) {
-                                if let Some(issue) = &edge.node {
-                                    let date = match issue.created_at {
-                                        Some(date) => date.date_naive().to_string(),
-                                        None => {
-                                            continue;
-                                        }
-                                    };
-                                    let title_str = match &issue.title {
-                                        Some(title) => format!("Title: {},", title),
-                                        None => String::new(),
-                                    };
-                                    let url_str = match &issue.url {
-                                        Some(u) => format!("Url: {}", u),
-                                        None => String::new(),
-                                    };
-
-                                    let author_str =
-                                        match issue.clone().author.and_then(|a| a.login) {
-                                            Some(auth) => format!("Author: {},", auth),
-                                            None => String::new(),
-                                        };
-
-                                    let assignees_str = {
-                                        let assignee_names = issue
-                                            .assignees
-                                            .as_ref()
-                                            .and_then(|e| e.edges.as_ref())
-                                            .map_or(Vec::new(), |assignee_edges| {
-                                                assignee_edges
-                                                    .iter()
-                                                    .filter_map(|edge| {
-                                                        edge.as_ref().and_then(|actual_edge| {
-                                                            actual_edge.node.as_ref().and_then(
-                                                                |user| {
-                                                                    user.login.as_ref().map(
-                                                                        |login_str| {
-                                                                            login_str.as_str()
-                                                                        },
-                                                                    )
-                                                                },
-                                                            )
-                                                        })
-                                                    })
-                                                    .collect::<Vec<&str>>()
-                                            });
-
-                                        if !assignee_names.is_empty() {
-                                            format!("Assignees: {},", assignee_names.join(", "))
-                                        } else {
-                                            String::new()
-                                        }
-                                    };
-
-                                    let state_str = match &issue.state {
-                                        Some(s) => format!("State: {},", s),
-                                        None => String::new(),
-                                    };
-
-                                    let body_str = match &issue.body {
-                                        Some(body_text) if body_text.len() > 180 => {
-                                            let truncated_body = body_text
-                                                .chars()
-                                                .take(100)
-                                                .chain(
-                                                    body_text
-                                                        .chars()
-                                                        .skip(body_text.chars().count() - 80),
-                                                )
-                                                .collect::<String>();
-
-                                            format!("Body: {}", truncated_body)
-                                        }
-                                        Some(body_text) => format!("Body: {},", body_text),
-                                        None => String::new(),
-                                    };
-
-                                    let assoc_str = match &issue.author_association {
-                                        Some(association) => {
-                                            format!("Author Association: {}", association)
-                                        }
-                                        None => String::new(),
-                                    };
-
-                                    let temp = format!(
-                                            "{title_str} {url_str} Created At: {date} {author_str} {assignees_str}  {state_str} {body_str} {assoc_str}"
-                                        );
-
-                                    out.push_str(&temp);
-                                    out.push_str("\n");
-                                } else {
-                                    continue;
-                                }
-                            }
-                        }
-
-                        if let Some(page_info) = &search.page_info {
-                            if let Some(has_next_page) = page_info.has_next_page {
-                                if has_next_page {
-                                    match &page_info.end_cursor {
-                                        Some(end_cursor) => {
-                                            cursor = Some(end_cursor.clone());
-                                            log::info!(
-                                                    "Fetched a page, moving to next page with cursor: {}",
-                                                    end_cursor
-                                                );
-                                            continue;
-                                        }
-                                        None => {
-                                            log::error!(
-                                                    "Warning: hasNextPage is true, but endCursor is None. This might result in missing data."
-                                                );
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    break;
-                }
-            },
-        }
-    }
-
-    Some(out)
-} */
