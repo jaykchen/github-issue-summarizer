@@ -1,5 +1,4 @@
 use dotenv::dotenv;
-// use http_req::{request::Method, request::Request, response, uri::Uri};
 use flowsnet_platform_sdk::logger;
 use github_flows::{
     get_octo, listen_to_event,
@@ -19,7 +18,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     let owner = env::var("github_owner").unwrap_or("juntao".to_string());
     let repo = env::var("github_repo").unwrap_or("test".to_string());
-    let trigger_phrase = env::var("trigger_phrase").unwrap_or("flows summarize".to_string());
+    let trigger_phrase = env::var("trigger_phrase").unwrap_or("flows_summarize".to_string());
 
     listen_to_event(
         &GithubLogin::Default,
@@ -47,25 +46,14 @@ async fn handler(owner: &str, repo: &str, trigger_phrase: &str, payload: EventPa
             [a, b] if b.trim() == trigger_phrase => a.trim().to_string(),
             [_, _] | _ => std::process::exit(1),
         };
-        log::error!("URL: {:?}", url);
         let (target_owner, target_repo) = match url.rsplitn(3, "/").take(2).collect::<Vec<&str>>()[..]
         {
             [a, b] => (b.trim().to_string(), a.trim().to_string()),
             _ => std::process::exit(1),
         };
-        log::error!("Target owner, repo: {:?}, {:?}", target_owner, target_repo);
-        // match octocrab
-        //     .issues(target_owner.clone(), target_repo.clone())
-        //     .list()
-        //     .state(State::Open)
-        //     .direction(Direction::Descending)
-        //     // .sort(Sort::Updated)
-        //     .per_page(100)
-        //     .page(1u32)
-        //     .send()
 
-        let a_week_ago = (chrono::Utc::now() - chrono::Duration::days(7))
-            .format("%Y-%m-%dT%H:%M:%SZ");
+        let a_week_ago =
+            (chrono::Utc::now() - chrono::Duration::days(7)).format("%Y-%m-%dT%H:%M:%SZ");
         let query =
             format!("repo:{target_owner}/{target_repo} is:issue state:open updated:>{a_week_ago}");
         match octocrab
@@ -158,14 +146,6 @@ pub fn squeeze_fit_post_texts(inp_str: &str, max_len: u16, split: f32) -> String
     if input_len < max_len as usize {
         return inp_str.to_string();
     }
-    // // Filter out the tokens corresponding to lines with undesired patterns
-    // let mut filtered_tokens = Vec::new();
-    // for line in inp_str.lines() {
-    //     let mut tokens_for_line = bpe.encode_ordinary(line);
-    //     if !line.contains("{{") && !line.contains("}}") {
-    //         filtered_tokens.extend(tokens_for_line.drain(..));
-    //     }
-    // }
     let n_take_from_beginning = (input_len as f32 * split).ceil() as usize;
     let n_take_from_end = max_len as usize - n_take_from_beginning;
 
@@ -233,8 +213,6 @@ pub async fn analyze_issue(owner: &str, repo: &str, issue: Issue) -> Option<Stri
         "Given the information that user '{issue_creator_name}' opened an issue titled '{issue_title}', your task is to deeply analyze the content of the issue posts. Distill the crux of the issue, the potential solutions suggested."
     );
 
-    // let system = &format!("As an AI co-owner of a GitHub repository, you are responsible for conducting a comprehensive analysis of GitHub issues. Your analytic focus encompasses distinct elements, including the issue's title, associated labels, body text, the identity of the issue's creator, their role, and the nature of the comments on the issue. Utilizing these data points, your task is to generate a succinct, context-aware summary of the issue.");
-
     let co = match all_text_from_issue.len() > 12000 {
         true => ChatOptions {
             model: ChatModel::GPT35Turbo16K,
@@ -256,7 +234,6 @@ pub async fn analyze_issue(owner: &str, repo: &str, issue: Issue) -> Option<Stri
     let usr_prompt_1 = &format!(
         "Analyze the GitHub issue content: {all_text_from_issue}. Provide a concise analysis touching upon: The central problem discussed in the issue. The main solutions proposed or agreed upon. Aim for a succinct, analytical summary that stays under 128 tokens."
     );
-    // let question = format!("{all_issue_texts}, concentrate on the principal arguments, suggested solutions, and areas of consensus or disagreement among the participants. From these elements, generate a concise summary of the entire issue to inform the next course of action.");
 
     match openai
         .chat_completion(&format!("issue_{issue_number}"), usr_prompt_1, &co)
@@ -269,5 +246,3 @@ pub async fn analyze_issue(owner: &str, repo: &str, issue: Issue) -> Option<Stri
         }
     }
 }
-
-
